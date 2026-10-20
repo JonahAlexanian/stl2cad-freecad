@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.cpfs/
+.cursor/
+All-logs/
+logs/
+historys.json

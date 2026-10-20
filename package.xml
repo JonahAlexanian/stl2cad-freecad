@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<package format="1" xmlns="https://wiki.freecad.org/Package_Metadata">
+  <name>STL2CAD</name>
+  <description>Converts an STL, or the model on screen, into a STEP file and saves it. Free for FreeCAD users. RAG Box sponsors this add-on. GAID (Guide AI Dev Pro) was used to build it.</description>
+  <version>0.1.0</version>
+  <date>2026-10-20</date>
+  <maintainer email="205463486+JonahAlexanian@users.noreply.github.com">JonahAlexanian</maintainer>
+  <license file="LICENSE">LGPL-2.1-or-later</license>
+  <url type="repository" branch="main">https://github.com/JonahAlexanian/stl2cad-freecad</url>
+  <url type="readme">https://github.com/JonahAlexanian/stl2cad-freecad/blob/main/README.md</url>
+  <url type="bugtracker">https://github.com/JonahAlexanian/stl2cad-freecad/issues</url>
+  <url type="website">https://ragbox.llc/</url>
+  <freecadmin>1.0.0</freecadmin>
+  <content>
+    <workbench>
+      <classname>Stl2CadWorkbench</classname>
+      <subdirectory>./</subdirectory>
+    </workbench>
+  </content>
+</package>
