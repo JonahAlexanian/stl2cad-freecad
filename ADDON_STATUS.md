@@ -1,55 +1,68 @@
 # STL2CAD add-on status
 
-Saved 2026-11-22.
+Updated 2026-11-22 (end of listing/layout work).
 
-## Listing
+## Where we are (read this first)
 
-- FreeCAD Addon Manager: **not listed yet** (waiting on review)
-- Public repo: https://github.com/JonahAlexanian/stl2cad-freecad
-- Branch: `main`
-- GitHub account: JonahAlexanian
-- Topics: freecad, addon
-- First request: https://github.com/FreeCAD/Addons/issues/180 (closed 2026-10-26 — 30-day wait)
-- **Current request:** https://github.com/FreeCAD/Addons/issues/213 (open, filed 2026-11-22)
-- **Reviewer:** mnesarco asked for modern namespaced layout (2026-11-22). Migrated in **v0.1.1** to `freecad/stl2cad/`.
+**Waiting on FreeCAD.** Nothing more to submit unless they comment on the issue.
 
-FreeCAD closed issue 180 because a new repo must be 30 days old (repo created 2026-10-20). We resubmitted on 2026-11-22 as issue 213. Do not reopen issue 180. Watch issue 213 and GitHub email until they accept; then STL2CAD should appear in **Tools → Addon Manager** about a day later. Follow-up note: `/home/rgesaah/reminders/stl2cad-freecad-FOLLOW-UP.md`.
+| Item | Status |
+|------|--------|
+| Addon Manager listing | **Not listed yet** |
+| Active request | [FreeCAD/Addons#213](https://github.com/FreeCAD/Addons/issues/213) — **open**, wait for team |
+| Do not reopen | [#180](https://github.com/FreeCAD/Addons/issues/180) (30-day wait; closed 2026-10-26) |
+| Our repo | [JonahAlexanian/stl2cad-freecad](https://github.com/JonahAlexanian/stl2cad-freecad) `main` |
+| Add-on version in `package.xml` | **0.1.1** |
+
+### Timeline
+
+1. **2026-10-20** — Public repo created; first listing request **#180**.
+2. **2026-10-26** — **chennes**: mandatory **30-day** repo age; closed **#180**.
+3. **2026-11-22** — Resubmitted **#213**.
+4. **2026-11-22** — **mnesarco**: use **modern** layout, not legacy `Init.py` / `InitGui.py`.
+5. **2026-11-22** — Migrated to `freecad/stl2cad/`; removed legacy root + `Stl2Cad/` (commits `697ae48`, `77705bc`). Replied on **#213**.
+6. **2026-11-22** — **Owner verified on Windows (FreeCAD 1.0):** panel loads, convert works. Must select all document objects, then **Load STL**, then **Convert**.
+
+### What happens next
+
+- Watch **#213** and GitHub email for accept or more feedback.
+- After acceptance, **Tools → Addon Manager** → **STL2CAD** (often ~1 day later).
+- Until then, install from git/`scp` is fine (see below).
+
+## Layout (modern only)
+
+```
+package.xml
+freecad/stl2cad/
+  init_gui.py
+  init.py
+  __init__.py
+  panel.py
+  client.py
+```
+
+- **No** root `Init.py`, `InitGui.py`, or `Stl2Cad/`.
+- **No** `freecad/__init__.py` at repo root (would break FreeCAD).
+
+Machine check: `python3 scripts/verify_modern_addon_layout.py` → `PASS`.
+
+## Windows install (owner PC)
+
+```powershell
+Remove-Item -Recurse -Force $env:APPDATA\FreeCAD\Mod\stl2cad-freecad
+scp -r rgesaah@192.168.1.15:/home/rgesaah/stl2cad-freecad "$env:APPDATA\FreeCAD\Mod\stl2cad-freecad"
+```
+
+Fully quit FreeCAD, reopen, select **STL2CAD** workbench. For multi-body documents, select all objects in the tree before **Load STL**.
 
 ## What the add-on is
 
-- Name: STL2CAD
-- Version: 0.1.0
-- FreeCAD: 1.0 or newer
-- License: LGPL-2.1-or-later
-- It converts an STL, or the model on screen, into a STEP file and saves that file.
-- It is free for FreeCAD users.
-- Help: https://ragbox.llc/
-- GAID (Guide AI Dev Pro) was used to build it.
-- The add-on calls https://www.stl2cad.com. https://stl2cad.com is the same converter. Both were answering when this was published.
-- People who open that website on their own are using a separate product.
+- Free **STL → STEP** inside FreeCAD; calls **https://www.stl2cad.com** (same converter as public product).
+- Help: **https://ragbox.llc/**. Sponsors: RAG Box, GAID.
+- **stl2cad.com** direct visitors = separate paid product.
 
-## What was published
+## Other notes
 
-These files are on the public repo:
-
-- `package.xml`
-- `README.md`
-- `LICENSE`
-- `.gitignore`
-- `Init.py`
-- `InitGui.py`
-- `Stl2Cad/client.py`
-- `Stl2Cad/panel.py`
-
-Local notes, CPFS logs, and agent rules were not published.
-
-## Checked
-
-- Repo page returned 200
-- `package.xml` on GitHub names the repo and LGPL-2.1-or-later
-- Published `Stl2Cad/client.py` calls https://www.stl2cad.com
-- FreeCAD issue 180 returned 200
-
-Proof of that check: `logs/publish-freecad-addon.txt`
-
-The full day note, including the disk, the sites, and what not to redo, is `/home/rgesaah/factai/project_status/2026-10-20_long_day_handoff.md`.
+- Follow-up reminder doc: `/home/rgesaah/reminders/stl2cad-freecad-FOLLOW-UP.md`
+- Longer handoff: `HANDOFF_2026-11-22.md`
+- Product/engine rules: `/home/rgesaah/factai/project_status/2026-10-18_stl2cad_one_engine_two_interfaces_handoff.md`
