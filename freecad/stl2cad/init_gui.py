@@ -1,17 +1,28 @@
-"""STL2CAD workbench. Opens the RAG Box and GAID panel."""
+"""STL2CAD workbench — convert mesh or STL to STEP."""
+
+from pathlib import Path
 
 import FreeCADGui as Gui
+
+_PKG = Path(__file__).resolve().parent
+_ICON = str(_PKG / "resources" / "icons" / "stl2cad.svg")
 
 
 class Stl2CadWorkbench(Gui.Workbench):
     MenuText = "STL2CAD"
-    ToolTip = "RAG Box and GAID"
+    ToolTip = "Convert an STL or the selected model to STEP"
+    Icon = _ICON
 
     def Initialize(self):
-        pass
+        from . import commands, preferences
+
+        commands.register()
+        preferences.register()
+        self.appendToolbar("STL2CAD", ["STL2CAD_OpenPanel"])
+        self.appendMenu("STL2CAD", ["STL2CAD_OpenPanel"])
 
     def Activated(self):
-        from freecad.stl2cad import panel
+        from . import panel
 
         panel.show()
 
@@ -19,4 +30,5 @@ class Stl2CadWorkbench(Gui.Workbench):
         return "Gui::PythonWorkbench"
 
 
+Gui.addIconPath(str(_PKG / "resources" / "icons"))
 Gui.addWorkbench(Stl2CadWorkbench())

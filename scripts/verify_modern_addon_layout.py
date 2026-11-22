@@ -21,25 +21,29 @@ def ok(msg: str) -> None:
 def main() -> None:
     pkg = ROOT / "package.xml"
     text = pkg.read_text()
-    if "./freecad/stl2cad" not in text:
-        fail("package.xml missing ./freecad/stl2cad subdirectory")
-    ok("package.xml points at ./freecad/stl2cad")
+    if "<subdirectory>" in text:
+        fail("package.xml must not use legacy <subdirectory> in modern layout")
+    if "Stl2CadWorkbench" not in text:
+        fail("package.xml missing Stl2CadWorkbench classname")
+    ok("package.xml modern workbench manifest")
 
     if (ROOT / "freecad" / "__init__.py").exists():
         fail("freecad/__init__.py must not exist (shadows FreeCAD)")
     ok("no freecad/__init__.py")
 
-    for name in ("init_gui.py", "init.py", "panel.py", "client.py"):
+    for name in ("init_gui.py", "panel.py", "client.py", "__init__.py"):
         path = ROOT / "freecad" / "stl2cad" / name
         if not path.is_file():
             fail("missing freecad/stl2cad/" + name)
+    if (ROOT / "freecad" / "stl2cad" / "init.py").is_file():
+        fail("freecad/stl2cad/init.py must not exist in modern layout")
     ok("workbench files present")
 
     init_gui = (ROOT / "freecad" / "stl2cad" / "init_gui.py").read_text()
     if "sys.path" in init_gui or "inspect" in init_gui:
         fail("init_gui.py must not manipulate sys.path")
-    if "from freecad.stl2cad import panel" not in init_gui:
-        fail("init_gui.py must import panel from freecad.stl2cad")
+    if "from . import panel" not in init_gui:
+        fail("init_gui.py must use relative import for panel")
     ok("init_gui.py uses namespaced import")
 
     panel = (ROOT / "freecad" / "stl2cad" / "panel.py").read_text()

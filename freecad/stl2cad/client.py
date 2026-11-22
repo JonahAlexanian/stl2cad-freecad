@@ -10,105 +10,6 @@ import urllib.request
 
 DEFAULT_BASE = "https://www.stl2cad.com"
 _CLIENT_HEADERS = {"User-Agent": "STL2CAD-FreeCAD"}
-COMFORT_TRIANGLES = 60000
-FINISH_TRIANGLES = 2500
-# The face finder turns a 0.1 mm tessellation of this engine into 92 faces.
-# A 1 percent grid erased the flutes and left a block.
-SCREEN_TRIANGLES = 30000
-
-
-def mesh_deflection(longest_mm):
-    """Tessellation step that still keeps the flutes. About 0.1 mm on this engine."""
-    longest = max(float(longest_mm), 1.0)
-    return min(max(longest * 0.0005, 0.1), 0.5)
-
-
-def coarser_deflection(current, triangle_count, limit=COMFORT_TRIANGLES):
-    """Return a larger step when the mesh is still too dense, else None."""
-    if triangle_count <= limit:
-        return None
-    return float(current) * 2
-
-
-def _triangle_area(points):
-    (ax, ay, az), (bx, by, bz), (cx, cy, cz) = points
-    ux, uy, uz = bx - ax, by - ay, bz - az
-    vx, vy, vz = cx - ax, cy - ay, cz - az
-    nx = uy * vz - uz * vy
-    ny = uz * vx - ux * vz
-    nz = ux * vy - uy * vx
-    return (nx * nx + ny * ny + nz * nz) ** 0.5 * 0.5
-
-
-def _cluster_facets(facets, origin, cell):
-    """Merge vertices that share a grid cell, keeping their real position."""
-    sums = {}
-    counts = {}
-    merged = []
-    seen = set()
-    for tri in facets:
-        keys = []
-        raw = []
-        for point in tri:
-            key = tuple(
-                int((float(point[axis]) - origin[axis]) / cell) for axis in range(3)
-            )
-            if key in keys:
-                continue
-            keys.append(key)
-            raw.append(tuple(float(point[axis]) for axis in range(3)))
-        if len(raw) < 3 or _triangle_area(raw) <= 1e-6:
-            continue
-        identity = tuple(sorted(keys))
-        if identity in seen:
-            continue
-        seen.add(identity)
-        for key, point in zip(keys, raw):
-            if key in sums:
-                sums[key] = tuple(sums[key][axis] + point[axis] for axis in range(3))
-                counts[key] += 1
-            else:
-                sums[key] = point
-                counts[key] = 1
-        merged.append(keys)
-    placed = []
-    for keys in merged:
-        points = tuple(
-            tuple(sums[key][axis] / counts[key] for axis in range(3)) for key in keys
-        )
-        if _triangle_area(points) <= 1e-6:
-            continue
-        placed.append(points)
-    return placed
-
-
-def reduce_facets(facets, limit=FINISH_TRIANGLES):
-    """Merge a dense mesh, but never coarser than 2 percent of the part."""
-    facets = list(facets)
-    if len(facets) <= limit:
-        return facets
-    mins = [
-        min(point[axis] for tri in facets for point in tri) for axis in range(3)
-    ]
-    maxs = [
-        max(point[axis] for tri in facets for point in tri) for axis in range(3)
-    ]
-    longest = max(maxs[axis] - mins[axis] for axis in range(3))
-    longest = max(longest, 1.0)
-    max_cell = max(longest * 0.01, 0.5)
-    cell = min(max(longest / (limit ** 0.5), 0.5), max_cell)
-    reduced = facets
-    for _ in range(8):
-        reduced = _cluster_facets(facets, mins, cell)
-        if len(reduced) <= limit or cell >= max_cell - 1e-9:
-            return reduced
-        cell = min(cell * 2, max_cell)
-    return reduced
-
-
-def screen_mesh(facets):
-    """Pass the tessellation through. The converter groups these triangles into faces."""
-    return list(facets)
 
 
 def _facet_normal(tri):
@@ -142,29 +43,25 @@ def write_stl(path, facets):
     return path
 
 
-def preview_sides(job, status):
-    """Text for the left STL pane and the right conversion pane."""
-    job = job or {}
-    status = status or {}
-    stl_name = job.get("stl_file") or "STL"
-    triangles = (job.get("stl_geometry") or {}).get("triangles")
-    left = stl_name if triangles is None else "%s\n%s triangles" % (stl_name, triangles)
+def _ensure_service_consent():
+    from . import consent
 
-    message = status.get("message") or ""
-    state = status.get("state") or ""
-    if job.get("has_step"):
-        step_name = job.get("step_file") or "STEP"
-        right = step_name if not message else "%s\n%s" % (step_name, message)
-    elif state == "error":
-        right = message or "Conversion failed"
-    else:
-        right = message or "Waiting"
-        if status.get("pct") is not None:
-            right = "%s\n%s%%" % (right, status.get("pct"))
-    return left, right
+    if not consent.has_consent():
+        raise RuntimeError(
+            "STL2CAD needs your consent before contacting %s. "
+            "Press Convert and accept the prompt, or check Edit → Preferences → STL2CAD."
+            % DEFAULT_BASE
+        )
+
+
+def _service_url(url):
+    prefix = DEFAULT_BASE.rstrip("/")
+    return url.startswith(prefix + "/") or url == prefix
 
 
 def _request(url, data=None, headers=None, timeout=120):
+    if _service_url(url):
+        _ensure_service_consent()
     sent = dict(_CLIENT_HEADERS)
     if headers:
         sent.update(headers)
@@ -191,18 +88,37 @@ def _request(url, data=None, headers=None, timeout=120):
         raise RuntimeError("Cannot reach the converter at %s" % url) from exc
 
 
+_MAX_STL_FACETS = 50_000_000
+
+
+def _sanitize_upload_filename(name):
+    base = os.path.basename(name or "model.stl") or "model.stl"
+    return base.replace("\r", "").replace("\n", "").replace('"', "")
+
+
+def _read_binary_stl(data):
+    if len(data) < 84:
+        return None
+    count = struct.unpack_from("<I", data, 80)[0]
+    if count <= 0 or count > _MAX_STL_FACETS:
+        return None
+    needed = 84 + count * 50
+    if len(data) < needed:
+        return None
+    facets = []
+    for index in range(count):
+        vals = struct.unpack_from("<12fH", data, 84 + index * 50)
+        facets.append((vals[3:6], vals[6:9], vals[9:12]))
+    return facets
+
+
 def read_stl(path):
     """Triangles from an STL file. The file is not changed."""
     with open(path, "rb") as handle:
         data = handle.read()
-    if len(data) >= 84:
-        count = struct.unpack_from("<I", data, 80)[0]
-        if count > 0 and 84 + count * 50 == len(data):
-            facets = []
-            for index in range(count):
-                vals = struct.unpack_from("<12fH", data, 84 + index * 50)
-                facets.append((vals[3:6], vals[6:9], vals[9:12]))
-            return facets
+    facets = _read_binary_stl(data)
+    if facets:
+        return facets
     facets = []
     current = []
     for line in data.decode("utf-8", errors="replace").splitlines():
@@ -217,15 +133,19 @@ def read_stl(path):
     return facets
 
 
-def upload_stl(path, base=DEFAULT_BASE):
-    filename = os.path.basename(path)
+def upload_stl(path_or_bytes, base=DEFAULT_BASE, filename=None):
     boundary = "----stl2cadboundary"
-    with open(path, "rb") as handle:
-        payload = handle.read()
+    if isinstance(path_or_bytes, (bytes, bytearray)):
+        payload = bytes(path_or_bytes)
+        fname = _sanitize_upload_filename(filename or "model.stl")
+    else:
+        with open(path_or_bytes, "rb") as handle:
+            payload = handle.read()
+        fname = _sanitize_upload_filename(filename or os.path.basename(path_or_bytes))
     head = (
         "--%s\r\n"
         'Content-Disposition: form-data; name="file"; filename="%s"\r\n'
-        "Content-Type: application/octet-stream\r\n\r\n" % (boundary, filename)
+        "Content-Type: application/octet-stream\r\n\r\n" % (boundary, fname)
     ).encode()
     tail = ("\r\n--%s--\r\n" % boundary).encode()
     return _request(
@@ -312,39 +232,6 @@ def status_line(status, has_picture=False):
     if message:
         return "Working. " + message
     return "Press Convert to use the model on screen, or Load STL to use a file."
-
-
-def view_triangles(triangles, yaw, pitch, zoom, width, height):
-    """Project triangles onto the panel. Each item is three (x, y) points."""
-    if not triangles or width < 2 or height < 2:
-        return []
-    points = [point for tri in triangles for point in tri]
-    center = [
-        (min(point[axis] for point in points) + max(point[axis] for point in points)) / 2
-        for axis in range(3)
-    ]
-    span = max(
-        max(point[axis] for point in points) - min(point[axis] for point in points)
-        for axis in range(3)
-    ) or 1.0
-    scale = min(width, height) * 0.75 / span * float(zoom)
-    cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
-    cos_pitch, sin_pitch = math.cos(pitch), math.sin(pitch)
-    painted = []
-    for tri in triangles:
-        screen = []
-        depth = 0.0
-        for point in tri:
-            x = float(point[0]) - center[0]
-            y = float(point[1]) - center[1]
-            z = float(point[2]) - center[2]
-            x, z = x * cos_yaw - z * sin_yaw, x * sin_yaw + z * cos_yaw
-            y, z = y * cos_pitch - z * sin_pitch, y * sin_pitch + z * cos_pitch
-            screen.append((width / 2 + x * scale, height / 2 - y * scale))
-            depth += z
-        painted.append((depth, screen))
-    painted.sort(key=lambda item: item[0])
-    return [screen for _depth, screen in painted]
 
 
 def render_view(triangles, yaw, pitch, zoom, width, height):

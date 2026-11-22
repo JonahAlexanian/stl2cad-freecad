@@ -1,3 +1,13 @@
+# Local-only status notes (do not publish — see HANDOFF / tracker)
+ADDON_STATUS.md
+
+.venv/
+dist/
+build/
+*.egg-info/
+.ruff_cache/
+.pytest_cache/
+
 __pycache__/
 *.pyc
 .cpfs/

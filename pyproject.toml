@@ -1,0 +1,26 @@
+[project]
+name = "stl2cad-freecad"
+version = "0.1.2"
+description = "FreeCAD add-on: STL or on-screen mesh to STEP via STL2CAD."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "LGPL-2.1-or-later" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py38"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "UP", "BLE"]
+ignore = ["BLE001", "UP031"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*" = ["UP031"]
+"tests/*" = ["E402"]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.8", "bandit>=1.8"]

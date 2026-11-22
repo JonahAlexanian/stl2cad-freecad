@@ -1,46 +1,25 @@
-"""STL2CAD panel. Names RAG Box and GAID, then sends a chosen STL to the converter."""
+"""STL2CAD panel — load mesh, convert remotely, save STEP."""
 
 import os
 import queue
 import tempfile
 
-from . import client
-
-RAG_BOX = (
-    "RAG Box sponsors free STL2STEP for FreeCAD. "
-    '<a href="https://ragbox.llc/">Get help at RAG Box</a>.'
-)
-GAID = (
-    "GAID (Guide AI Dev Pro) guides AI programming. "
-    "It was used to build this FreeCAD add-on."
-)
+from . import client, consent, qt_compat
 
 _DOCK = None
-_EVENTS = queue.Queue()
 
 
 def panel_lines():
-    return (RAG_BOX, GAID)
+    intro = (
+        "Load a mesh from the document or upload an STL, then Convert to STEP. "
+        "Conversion uses stl2cad.com after you consent."
+    )
+    return (intro,)
 
 
 def large_view_size(width, height):
     """Size of the large STL and STEP window."""
     return max(int(width) * 9 // 10, 960), max(int(height) * 17 // 20, 640)
-
-
-def _qt():
-    try:
-        from PySide6 import QtCore, QtGui, QtWidgets
-    except ImportError:
-        from PySide2 import QtCore, QtGui, QtWidgets
-    return QtCore, QtGui, QtWidgets
-
-
-def _left_area(QtCore):
-    dock = getattr(QtCore.Qt, "DockWidgetArea", None)
-    if dock is not None and hasattr(dock, "LeftDockWidgetArea"):
-        return dock.LeftDockWidgetArea
-    return QtCore.Qt.LeftDockWidgetArea
 
 
 def _deviation_mm(slider_value):
@@ -119,7 +98,14 @@ def _step_triangles(job, status):
     return client.step_preview_triangles(payload)
 
 
-def _run_convert(stl_path, facets, remove_after=False, consider_extrusions=True):
+def _safe_step_preview(job, status):
+    try:
+        return _step_triangles(job, status)
+    except Exception:
+        return None
+
+
+def _run_convert(stl_path, facets, events, work_dir=None, consider_extrusions=True):
     try:
         job = client.upload_stl(stl_path)
         job_id = job.get("id")
@@ -128,37 +114,49 @@ def _run_convert(stl_path, facets, remove_after=False, consider_extrusions=True)
         job["id"] = job_id
         client.start_convert(job_id, consider_extrusions=consider_extrusions)
         status = client.read_status(job_id)
-        _EVENTS.put(("update", job, status, facets, _step_triangles(job, status)))
+        events.put(
+            ("update", job, status, facets, _safe_step_preview(job, status))
+        )
     except Exception as exc:
-        _EVENTS.put(("error", str(exc)))
+        events.put(("error", str(exc)))
     finally:
-        if remove_after:
-            try:
-                os.remove(stl_path)
-            except OSError:
-                pass
+        if work_dir:
+            import shutil
+
+            shutil.rmtree(work_dir, ignore_errors=True)
 
 
-def _poll_job(job_id, facets):
+def _poll_job(job_id, facets, events):
     try:
         status = client.read_status(job_id)
         job = client.read_job(job_id)
         job["id"] = job_id
-        _EVENTS.put(("update", job, status, facets, _step_triangles(job, status)))
+        events.put(
+            ("update", job, status, facets, _safe_step_preview(job, status))
+        )
     except Exception as exc:
-        _EVENTS.put(("error", str(exc)))
+        events.put(("error", str(exc)))
 
 
-def _shape_view(QtCore, QtGui, QtWidgets):
+def _shape_view():
+    from PySide import QtCore, QtGui, QtWidgets
+
     class _View(QtWidgets.QWidget):
         def __init__(self, empty_text):
-            super(_View, self).__init__()
+            super().__init__()
             self._empty = empty_text
             self._triangles = []
             self._yaw = 0.9
             self._pitch = 0.45
             self._zoom = 1.0
             self._last = None
+            self._dragging = False
+            self._cache_key = None
+            self._cached_image = None
+            self._render_timer = QtCore.QTimer(self)
+            self._render_timer.setSingleShot(True)
+            self._render_timer.setInterval(50)
+            self._render_timer.timeout.connect(self._flush_render)
             self.setMinimumSize(280, 240)
             policy = QtWidgets.QSizePolicy(
                 QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
@@ -173,46 +171,24 @@ def _shape_view(QtCore, QtGui, QtWidgets):
             self._yaw = 0.9
             self._pitch = 0.45
             self._zoom = 1.0
+            self._cache_key = None
+            self._cached_image = None
             self.update()
 
-        def mousePressEvent(self, event):
-            self._last = event.pos()
-
-        def mouseMoveEvent(self, event):
-            if self._last is None or not (event.buttons() & QtCore.Qt.LeftButton):
-                return
-            pos = event.pos()
-            self._yaw += (pos.x() - self._last.x()) * 0.01
-            self._pitch += (pos.y() - self._last.y()) * 0.01
-            self._last = pos
-            self.update()
-
-        def mouseReleaseEvent(self, _event):
-            self._last = None
-
-        def wheelEvent(self, event):
-            step = event.angleDelta().y()
-            self._zoom *= 1.1 if step > 0 else 0.9
-            self._zoom = max(0.2, min(self._zoom, 8.0))
-            self.update()
-
-        def paintEvent(self, _event):
-            painter = QtGui.QPainter(self)
-            painter.fillRect(self.rect(), QtGui.QColor(32, 34, 38))
-            if not self._triangles:
-                painter.setPen(QtGui.QColor(190, 190, 190))
-                painter.drawText(self.rect(), QtCore.Qt.AlignCenter, self._empty)
-                return
-            shades = client.render_view(
-                self._triangles, self._yaw, self._pitch, self._zoom,
-                self.width(), self.height(),
+        def _cache_tuple(self, half_res):
+            width = max(self.width() // (2 if half_res else 1), 1)
+            height = max(self.height() // (2 if half_res else 1), 1)
+            return (
+                len(self._triangles),
+                self._yaw,
+                self._pitch,
+                self._zoom,
+                width,
+                height,
+                half_res,
             )
-            if not shades:
-                painter.setPen(QtGui.QColor(190, 190, 190))
-                painter.drawText(self.rect(), QtCore.Qt.AlignCenter, self._empty)
-                return
-            width = self.width()
-            height = self.height()
+
+        def _shades_to_image(self, shades, width, height, full_width, full_height):
             pixels = bytearray(width * height * 4)
             for index, shade in enumerate(shades):
                 offset = index * 4
@@ -228,6 +204,77 @@ def _shape_view(QtCore, QtGui, QtWidgets):
             image = QtGui.QImage(
                 bytes(pixels), width, height, width * 4, QtGui.QImage.Format_RGB32
             )
+            if (width, height) != (full_width, full_height):
+                image = image.scaled(full_width, full_height)
+            return image
+
+        def _render_image(self, half_res):
+            full_width = max(self.width(), 1)
+            full_height = max(self.height(), 1)
+            width = max(full_width // (2 if half_res else 1), 1)
+            height = max(full_height // (2 if half_res else 1), 1)
+            shades = client.render_view(
+                self._triangles,
+                self._yaw,
+                self._pitch,
+                self._zoom,
+                width,
+                height,
+            )
+            if not shades:
+                return None
+            return self._shades_to_image(shades, width, height, full_width, full_height)
+
+        def _flush_render(self):
+            self._dragging = False
+            self._cache_key = None
+            self.update()
+
+        def mousePressEvent(self, event):
+            self._last = event.pos()
+
+        def mouseMoveEvent(self, event):
+            if self._last is None or not (event.buttons() & QtCore.Qt.LeftButton):
+                return
+            pos = event.pos()
+            self._yaw += (pos.x() - self._last.x()) * 0.01
+            self._pitch += (pos.y() - self._last.y()) * 0.01
+            self._last = pos
+            self._dragging = True
+            self._cache_key = None
+            self._render_timer.start()
+            self.update()
+
+        def mouseReleaseEvent(self, _event):
+            self._last = None
+            self._render_timer.start()
+
+        def wheelEvent(self, event):
+            step = event.angleDelta().y()
+            self._zoom *= 1.1 if step > 0 else 0.9
+            self._zoom = max(0.2, min(self._zoom, 8.0))
+            self._cache_key = None
+            self.update()
+
+        def paintEvent(self, _event):
+            painter = QtGui.QPainter(self)
+            painter.fillRect(self.rect(), QtGui.QColor(32, 34, 38))
+            if not self._triangles:
+                painter.setPen(QtGui.QColor(190, 190, 190))
+                painter.drawText(self.rect(), QtCore.Qt.AlignCenter, self._empty)
+                return
+            half_res = self._dragging
+            key = self._cache_tuple(half_res)
+            if key == self._cache_key and self._cached_image is not None:
+                painter.drawImage(0, 0, self._cached_image)
+                return
+            image = self._render_image(half_res)
+            if image is None:
+                painter.setPen(QtGui.QColor(190, 190, 190))
+                painter.drawText(self.rect(), QtCore.Qt.AlignCenter, self._empty)
+                return
+            self._cache_key = key
+            self._cached_image = image
             painter.drawImage(0, 0, image)
 
     return _View
@@ -239,22 +286,30 @@ def show():
     import threading
 
     import FreeCADGui as Gui
+    from PySide import QtCore, QtGui, QtWidgets
 
-    QtCore, QtGui, QtWidgets = _qt()
     window = Gui.getMainWindow()
-    if _DOCK is not None:
+    if qt_compat.widget_is_valid(_DOCK):
         _DOCK.show()
         _DOCK.raise_()
         return
+    if _DOCK is not None:
+        _DOCK = None
 
-    view_cls = _shape_view(QtCore, QtGui, QtWidgets)
+    events = queue.Queue()
+    view_cls = _shape_view()
     dock = QtWidgets.QDockWidget("STL2CAD", window)
+    dock.setObjectName("STL2CAD_Dock")
     dock.setMinimumSize(680, 420)
+
+    def _on_dock_destroyed():
+        global _DOCK
+        _DOCK = None
+
+    dock.destroyed.connect(_on_dock_destroyed)
     body = QtWidgets.QWidget()
     layout = QtWidgets.QVBoxLayout(body)
-    rich = getattr(QtCore.Qt, "RichText", None)
-    if rich is None:
-        rich = QtCore.Qt.TextFormat.RichText
+    rich = qt_compat.rich_text_format(QtCore)
     for line in panel_lines():
         label = QtWidgets.QLabel(line)
         label.setWordWrap(True)
@@ -336,7 +391,7 @@ def show():
 
     def apply_event():
         try:
-            kind, *rest = _EVENTS.get_nowait()
+            kind, *rest = events.get_nowait()
         except queue.Empty:
             return
         if kind == "error":
@@ -351,9 +406,32 @@ def show():
             set_busy(False)
             status.setText("Saved %s" % rest[0])
             return
+        if kind == "facets_loaded":
+            facets, dev_mm = rest[0], rest[1]
+            state["busy"] = False
+            progress.setVisible(False)
+            set_busy(False)
+            state["source"] = "model"
+            state["path"] = None
+            show_facets(
+                facets,
+                "Loaded %s triangles at %.2f mm. Press Convert."
+                % (format(len(facets), ","), dev_mm),
+            )
+            return
+        if kind == "load_error":
+            state["busy"] = False
+            progress.setVisible(False)
+            set_busy(False)
+            status.setText(rest[0])
+            return
         job, job_status, facets, step = rest
         state["facets"] = facets or []
-        finished = step is not None or (job_status or {}).get("state") in ("done", "error")
+        finished = (
+            (job_status or {}).get("state") in ("done", "error")
+            or bool((job or {}).get("has_step"))
+            or step is not None
+        )
         if job.get("id"):
             state["done_id"] = job.get("id")
         if job.get("step_file"):
@@ -363,7 +441,15 @@ def show():
         if step is not None:
             state["step"] = step
             right_view.set_triangles(step)
-        status.setText(client.status_line(job_status, has_picture=bool(step)))
+        line = client.status_line(job_status, has_picture=bool(step))
+        if (job_status or {}).get("state") == "done" and step is None and (
+            job or {}
+        ).get("has_step"):
+            line = (
+                "Complete. STEP is ready; preview could not be loaded. "
+                "You can still Save STEP."
+            )
+        status.setText(line)
         done = (job_status or {}).get("progress_done")
         total = (job_status or {}).get("progress_total")
         if total and not finished:
@@ -386,7 +472,7 @@ def show():
 
             def worker():
                 try:
-                    _poll_job(job_id, facets)
+                    _poll_job(job_id, facets, events)
                 finally:
                     state["polling"] = False
 
@@ -402,18 +488,21 @@ def show():
     def on_load():
         if state["busy"]:
             return
-        try:
-            facets = _facets_from_selection(_deviation_mm(density.value()))
-        except Exception as exc:
-            status.setText(str(exc))
-            return
-        state["source"] = "model"
-        state["path"] = None
-        show_facets(
-            facets,
-            "Loaded %s triangles at %.2f mm. Press Convert."
-            % (format(len(facets), ","), _deviation_mm(density.value())),
-        )
+        dev_mm = _deviation_mm(density.value())
+        state["busy"] = True
+        set_busy(True)
+        progress.setVisible(True)
+        progress.setRange(0, 0)
+        status.setText("Meshing the selection…")
+
+        def worker():
+            try:
+                facets = _facets_from_selection(dev_mm)
+                events.put(("facets_loaded", facets, dev_mm))
+            except Exception as exc:
+                events.put(("load_error", str(exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def on_upload():
         if state["busy"]:
@@ -443,9 +532,14 @@ def show():
         if not facets:
             status.setText("Load the selected object, or upload an STL, then Convert.")
             return
-        handle = tempfile.NamedTemporaryFile(suffix=".stl", delete=False)
-        handle.close()
-        client.write_stl(handle.name, facets)
+        if not consent.ensure_consent():
+            status.setText(
+                "Convert needs your consent to send the mesh to stl2cad.com."
+            )
+            return
+        work_dir = tempfile.mkdtemp(prefix="stl2cad_")
+        stl_path = os.path.join(work_dir, "convert.stl")
+        client.write_stl(stl_path, facets)
         state["busy"] = True
         state["step"] = []
         set_busy(True)
@@ -453,7 +547,7 @@ def show():
         status.setText("Sending %s triangles." % format(len(facets), ","))
         threading.Thread(
             target=_run_convert,
-            args=(handle.name, facets, True, consider_box.isChecked()),
+            args=(stl_path, facets, events, work_dir, consider_box.isChecked()),
             daemon=True,
         ).start()
 
@@ -479,9 +573,9 @@ def show():
         def worker():
             try:
                 client.save_step(job_id, chosen)
-                _EVENTS.put(("saved", chosen))
+                events.put(("saved", chosen))
             except Exception as exc:
-                _EVENTS.put(("error", str(exc)))
+                events.put(("error", str(exc)))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -489,6 +583,11 @@ def show():
         job_id = state.get("job_id") or state.get("done_id")
         if not job_id:
             status.setText("Convert first. Then Open viewer uses the stl2cad page.")
+            return
+        if not consent.ensure_consent():
+            status.setText(
+                "Open viewer needs your consent to share the job id with stl2cad.com."
+            )
             return
         url = "%s/?job_id=%s&freecad=1" % (client.DEFAULT_BASE, job_id)
         opened = QtGui.QDesktopServices.openUrl(QtCore.QUrl(url))
@@ -515,5 +614,5 @@ def show():
     timer.timeout.connect(on_tick)
     timer.start()
 
-    window.addDockWidget(_left_area(QtCore), dock)
+    window.addDockWidget(qt_compat.dock_widget_area_left(QtCore), dock)
     _DOCK = dock
