@@ -1,17 +1,19 @@
 # STL2CAD add-on status
 
-Saved 2026-10-20.
+Saved 2026-11-22.
 
 ## Listing
 
-- FreeCAD Addon Manager: **not listed yet**
+- FreeCAD Addon Manager: **not listed yet** (waiting on review)
 - Public repo: https://github.com/JonahAlexanian/stl2cad-freecad
 - Branch: `main`
 - GitHub account: JonahAlexanian
 - Topics: freecad, addon
-- Addition request: https://github.com/FreeCAD/Addons/issues/180 (open)
+- First request: https://github.com/FreeCAD/Addons/issues/180 (closed 2026-10-26 — 30-day wait)
+- **Current request:** https://github.com/FreeCAD/Addons/issues/213 (open, filed 2026-11-22)
+- **Reviewer:** mnesarco asked for modern namespaced layout (2026-11-22). Migrated in **v0.1.1** to `freecad/stl2cad/`.
 
-FreeCAD still has to review issue 180. After they accept it, STL2CAD shows up in **Tools → Addon Manager**, usually about a day later.
+FreeCAD closed issue 180 because a new repo must be 30 days old (repo created 2026-10-20). We resubmitted on 2026-11-22 as issue 213. Do not reopen issue 180. Watch issue 213 and GitHub email until they accept; then STL2CAD should appear in **Tools → Addon Manager** about a day later. Follow-up note: `/home/rgesaah/reminders/stl2cad-freecad-FOLLOW-UP.md`.
 
 ## What the add-on is
 

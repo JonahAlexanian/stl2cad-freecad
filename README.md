@@ -10,6 +10,8 @@ After FreeCAD lists it, open **Tools → Addon Manager**, find **STL2CAD**, and 
 
 FreeCAD 1.0 or newer.
 
+The workbench uses the modern namespaced layout: `freecad/stl2cad/` with `init_gui.py` (see `package.xml`).
+
 ## Use
 
 1. Open a model, or leave the screen empty if you will upload an STL.

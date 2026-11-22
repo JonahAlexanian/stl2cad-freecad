@@ -1,0 +1,1 @@
+"""STL2CAD app initialization (no global side effects at import)."""
