@@ -1,0 +1,33 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dev tools
+        run: pip install pytest ruff bandit
+      - name: Layout and feature verify scripts
+        run: |
+          python3 scripts/verify_modern_addon_layout.py
+          python3 scripts/verify_consent_e2e.py
+          python3 scripts/verify_manifest_polish.py
+          python3 scripts/verify_gui_polish.py
+          python3 scripts/verify_robustness.py
+          python3 scripts/verify_icon_manifest.py
+          python3 scripts/verify_freecad_compat.py
+          python3 scripts/verify_security_md.py
+      - name: Ruff
+        run: ruff check freecad/ tests/
+      - name: Bandit
+        run: bandit -r freecad/ -q -c bandit.yaml
+      - name: Pytest
+        run: pytest -q
